@@ -192,7 +192,7 @@ export class AnthropicTransformer implements Transformer {
       result.reasoning = {
         effort: getThinkLevel(request.thinking.budget_tokens),
         // max_tokens: request.thinking.budget_tokens,
-        enabled: request.thinking.type === "enabled",
+        enabled: true,  // Always enable thinking when thinking block is present (Claude Code may send type="adaptive" instead of "enabled")
       };
     }
     if (request.tool_choice) {
@@ -961,6 +961,9 @@ export class AnthropicTransformer implements Transformer {
       `Original OpenAI response`
     );
     try {
+      // Strip reasoning_content and thinking from response to prevent multi-turn passback issues
+      delete (openaiResponse.choices[0].message as any).reasoning_content;
+      delete (openaiResponse.choices[0].message as any).thinking;
       const choice = openaiResponse.choices[0];
       if (!choice) {
         throw new Error("No choices found in OpenAI response");
