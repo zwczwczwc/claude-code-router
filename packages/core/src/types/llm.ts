@@ -64,6 +64,8 @@ export interface UnifiedMessage {
     content: string;
     signature?: string;
   };
+  /** DeepSeek reasoning_content for multi-turn thinking passback */
+  reasoning_content?: string;
 }
 
 // 统一的工具定义接口
@@ -107,6 +109,8 @@ export interface UnifiedChatRequest {
 
     enabled?: boolean;
   };
+  /** OpenAI-native reasoning_effort string (preferred over reasoning object for DeepSeek/OneAPI) */
+  reasoning_effort?: ThinkLevel;
 }
 
 // 统一的响应接口

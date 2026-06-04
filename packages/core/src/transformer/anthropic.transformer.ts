@@ -1,6 +1,7 @@
 import { ChatCompletion } from "openai/resources";
 import {
   LLMProvider,
+  ThinkLevel,
   UnifiedChatRequest,
   UnifiedMessage,
   UnifiedTool,
@@ -188,12 +189,14 @@ export class AnthropicTransformer implements Transformer {
         : undefined,
       tool_choice: request.tool_choice,
     };
+    // Fix: Use OpenAI-native reasoning_effort string (supported by OneAPI/DeepSeek)
+    // Fallback to model-name heuristic when Claude Code doesn't send thinking field
     if (request.thinking) {
-      result.reasoning = {
-        effort: getThinkLevel(request.thinking.budget_tokens),
-        // max_tokens: request.thinking.budget_tokens,
-        enabled: true,  // Always enable thinking when thinking block is present (Claude Code may send type="adaptive" instead of "enabled")
-      };
+      result.reasoning_effort = getThinkLevel(
+        request.thinking.budget_tokens
+      );
+    } else if ((request.model || "").includes("deepseek")) {
+      result.reasoning_effort = "xhigh" as ThinkLevel;
     }
     if (request.tool_choice) {
       if (request.tool_choice.type === "tool") {
@@ -205,13 +208,12 @@ export class AnthropicTransformer implements Transformer {
         result.tool_choice = request.tool_choice.type;
       }
     }
-    // Fix: When thinking is enabled but context compression lost reasoning_content,
-    // inject empty reasoning_content to satisfy DeepSeek's multi-turn requirement
-    if (request.thinking) {
-      for (const msg of messages) {
-        if (msg.role === "assistant" && !(msg as any).thinking) {
-          (msg as any).thinking = { content: "" };
-        }
+    // Fix: Always inject reasoning_content for assistant messages.
+    // DeepSeek's thinking mode requires reasoning_content in multi-turn conversations;
+    // empty string is a safe no-op for models that don't use thinking.
+    for (const msg of messages) {
+      if (msg.role === "assistant" && msg.reasoning_content === undefined) {
+        msg.reasoning_content = "";
       }
     }
     return result;
@@ -970,11 +972,19 @@ export class AnthropicTransformer implements Transformer {
       `Original OpenAI response`
     );
     try {
-      // Strip reasoning_content and thinking from response to prevent multi-turn passback issues
+      // Save thinking data before stripping; convert reasoning_content→thinking if needed
+      // (reasoning transformer may not be configured, so we handle it here)
       const choice = openaiResponse.choices[0];
-      const thinkingData = (choice.message as any)?.thinking;
-      delete (choice.message as any).reasoning_content;
-      delete (choice.message as any).thinking;
+      const rawMsg = choice.message as any;
+      if (rawMsg?.reasoning_content && !rawMsg?.thinking) {
+        rawMsg.thinking = {
+          content: rawMsg.reasoning_content,
+          signature: "ccr_" + Date.now(),
+        };
+      }
+      const thinkingData = rawMsg?.thinking;
+      delete rawMsg.reasoning_content;
+      delete rawMsg.thinking;
       if (!choice) {
         throw new Error("No choices found in OpenAI response");
       }
