@@ -208,14 +208,11 @@ export class AnthropicTransformer implements Transformer {
         result.tool_choice = request.tool_choice.type;
       }
     }
-    // Fix: Always inject reasoning_content for assistant messages.
-    // DeepSeek's thinking mode requires reasoning_content in multi-turn conversations;
-    // empty string is a safe no-op for models that don't use thinking.
-    for (const msg of messages) {
-      if (msg.role === "assistant" && msg.reasoning_content === undefined) {
-        msg.reasoning_content = "";
-      }
-    }
+    // NOTE: Do NOT inject reasoning_content for assistant messages.
+    // DeepSeek API docs explicitly state that including reasoning_content in
+    // input messages causes a 400 error in multi-turn conversations.
+    // The reasoning_content from previous responses should be stripped before
+    // sending the next request. See: https://api-docs.deepseek.com/guides/reasoning_model
     return result;
   }
 
