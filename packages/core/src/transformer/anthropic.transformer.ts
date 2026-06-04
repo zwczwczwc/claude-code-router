@@ -189,14 +189,12 @@ export class AnthropicTransformer implements Transformer {
         : undefined,
       tool_choice: request.tool_choice,
     };
-    // Fix: Use OpenAI-native reasoning_effort string (supported by OneAPI/DeepSeek)
-    // Fallback to model-name heuristic when Claude Code doesn't send thinking field
     if (request.thinking) {
-      result.reasoning_effort = getThinkLevel(
-        request.thinking.budget_tokens
-      );
-    } else if ((request.model || "").includes("deepseek")) {
-      result.reasoning_effort = "xhigh" as ThinkLevel;
+      result.reasoning = {
+        effort: getThinkLevel(request.thinking.budget_tokens),
+        // max_tokens: request.thinking.budget_tokens,
+        enabled: request.thinking.type === "enabled",
+      };
     }
     if (request.tool_choice) {
       if (request.tool_choice.type === "tool") {
