@@ -205,6 +205,15 @@ export class AnthropicTransformer implements Transformer {
         result.tool_choice = request.tool_choice.type;
       }
     }
+    // Fix: When thinking is enabled but context compression lost reasoning_content,
+    // inject empty reasoning_content to satisfy DeepSeek's multi-turn requirement
+    if (request.thinking) {
+      for (const msg of messages) {
+        if (msg.role === "assistant" && !(msg as any).thinking) {
+          (msg as any).thinking = { content: "" };
+        }
+      }
+    }
     return result;
   }
 
