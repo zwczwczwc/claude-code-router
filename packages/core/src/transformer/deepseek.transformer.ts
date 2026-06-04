@@ -11,18 +11,18 @@ export class DeepseekTransformer implements Transformer {
     request: UnifiedChatRequest,
     provider?: any
   ): Promise<UnifiedChatRequest> {
-    // Limit max_tokens to DeepSeek's limit
-    if (request.max_tokens && request.max_tokens > 8192) {
-      request.max_tokens = 8192;
-    }
-
-    // Only apply DeepSeek-specific thinking mode fixes for DeepSeek models
+    // Isolation: only process deepseek models
     const isDeepseek =
       provider?.name?.toLowerCase().includes("deepseek") ||
       request.model?.toLowerCase().includes("deepseek");
     if (!isDeepseek) return request;
 
-    // Inject reasoning_content from thinking.content or cache into assistant messages
+    // Raise max_tokens for V4 Pro (32768), keep 8192 for older models
+    if (request.max_tokens && request.max_tokens > 8192) {
+      request.max_tokens = request.model?.includes("v4") ? 32768 : 8192;
+    }
+
+    // Inject reasoning_content from thinking.content or cache
     request.messages?.forEach((msg) => {
       if (msg.role === "assistant") {
         if (msg.thinking?.content) {
@@ -34,15 +34,16 @@ export class DeepseekTransformer implements Transformer {
       }
     });
 
-    // Enable DeepSeek thinking mode with max effort (default for Claude Code)
+    // Enable thinking mode with maximum effort
     request.thinking = { type: "enabled" };
-    // Clean up any residual reasoning field from upstream transformers
+    request.reasoning_effort = "max";
     delete (request as any).reasoning;
 
     return request;
   }
 
   async transformResponseOut(response: Response): Promise<Response> {
+    // --- response handler unchanged from upstream ---
     if (response.headers.get("Content-Type")?.includes("application/json")) {
       const jsonResponse = await response.json();
       return new Response(JSON.stringify(jsonResponse), {
@@ -62,6 +63,7 @@ export class DeepseekTransformer implements Transformer {
       const stream = new ReadableStream({
         async start(controller) {
           const reader = response.body!.getReader();
+
           const processBuffer = (
             buffer: string,
             controller: ReadableStreamDefaultController,
@@ -69,9 +71,7 @@ export class DeepseekTransformer implements Transformer {
           ) => {
             const lines = buffer.split("\n");
             for (const line of lines) {
-              if (line.trim()) {
-                controller.enqueue(encoder.encode(line + "\n"));
-              }
+              if (line.trim()) controller.enqueue(encoder.encode(line + "\n"));
             }
           };
 
@@ -88,10 +88,7 @@ export class DeepseekTransformer implements Transformer {
           ) => {
             const { controller, encoder } = context;
 
-            if (
-              line.startsWith("data: ") &&
-              line.trim() !== "data: [DONE]"
-            ) {
+            if (line.startsWith("data: ") && line.trim() !== "data: [DONE]") {
               try {
                 const data = JSON.parse(line.slice(6));
 
@@ -101,23 +98,18 @@ export class DeepseekTransformer implements Transformer {
                   );
                   const thinkingChunk = {
                     ...data,
-                    choices: [
-                      {
-                        ...data.choices[0],
-                        delta: {
-                          ...data.choices[0].delta,
-                          thinking: {
-                            content: data.choices[0].delta.reasoning_content,
-                          },
-                        },
+                    choices: [{
+                      ...data.choices[0],
+                      delta: {
+                        ...data.choices[0].delta,
+                        thinking: { content: data.choices[0].delta.reasoning_content },
                       },
-                    ],
+                    }],
                   };
                   delete thinkingChunk.choices[0].delta.reasoning_content;
-                  const thinkingLine = `data: ${JSON.stringify(
-                    thinkingChunk
-                  )}\n\n`;
-                  controller.enqueue(encoder.encode(thinkingLine));
+                  controller.enqueue(
+                    encoder.encode(`data: ${JSON.stringify(thinkingChunk)}\n\n`)
+                  );
                   return;
                 }
 
@@ -127,48 +119,42 @@ export class DeepseekTransformer implements Transformer {
                   !context.isReasoningComplete()
                 ) {
                   context.setReasoningComplete(true);
-                  // Cache the reasoning content for next multi-turn request
+                  // Cache for next multi-turn request
                   _reasoningCache = context.reasoningContent();
                   const signature = Date.now().toString();
-
                   const thinkingChunk = {
                     ...data,
-                    choices: [
-                      {
-                        ...data.choices[0],
-                        delta: {
-                          ...data.choices[0].delta,
-                          content: null,
-                          thinking: {
-                            content: context.reasoningContent(),
-                            signature: signature,
-                          },
+                    choices: [{
+                      ...data.choices[0],
+                      delta: {
+                        ...data.choices[0].delta,
+                        content: null,
+                        thinking: {
+                          content: context.reasoningContent(),
+                          signature: signature,
                         },
                       },
-                    ],
+                    }],
                   };
                   delete thinkingChunk.choices[0].delta.reasoning_content;
-                  const thinkingLine = `data: ${JSON.stringify(
-                    thinkingChunk
-                  )}\n\n`;
-                  controller.enqueue(encoder.encode(thinkingLine));
+                  controller.enqueue(
+                    encoder.encode(`data: ${JSON.stringify(thinkingChunk)}\n\n`)
+                  );
                 }
 
                 if (data.choices[0]?.delta?.reasoning_content) {
                   delete data.choices[0].delta.reasoning_content;
                 }
-
                 if (
                   data.choices?.[0]?.delta &&
                   Object.keys(data.choices[0].delta).length > 0
                 ) {
-                  if (context.isReasoningComplete()) {
-                    data.choices[0].index++;
-                  }
-                  const modifiedLine = `data: ${JSON.stringify(data)}\n\n`;
-                  controller.enqueue(encoder.encode(modifiedLine));
+                  if (context.isReasoningComplete()) data.choices[0].index++;
+                  controller.enqueue(
+                    encoder.encode(`data: ${JSON.stringify(data)}\n\n`)
+                  );
                 }
-              } catch (e) {
+              } catch {
                 controller.enqueue(encoder.encode(line + "\n"));
               }
             } else {
@@ -180,31 +166,23 @@ export class DeepseekTransformer implements Transformer {
             while (true) {
               const { done, value } = await reader.read();
               if (done) {
-                if (buffer.trim()) {
-                  processBuffer(buffer, controller, encoder);
-                }
+                if (buffer.trim()) processBuffer(buffer, controller, encoder);
                 break;
               }
-
               const chunk = decoder.decode(value, { stream: true });
               buffer += chunk;
-
               const lines = buffer.split("\n");
               buffer = lines.pop() || "";
-
               for (const line of lines) {
                 if (!line.trim()) continue;
-
                 try {
                   processLine(line, {
                     controller,
                     encoder,
                     reasoningContent: () => reasoningContent,
-                    appendReasoningContent: (content) =>
-                      (reasoningContent += content),
+                    appendReasoningContent: (c) => (reasoningContent += c),
                     isReasoningComplete: () => isReasoningComplete,
-                    setReasoningComplete: (val) =>
-                      (isReasoningComplete = val),
+                    setReasoningComplete: (v) => (isReasoningComplete = v),
                   });
                 } catch (error) {
                   console.error("Error processing line:", line, error);
@@ -216,11 +194,7 @@ export class DeepseekTransformer implements Transformer {
             console.error("Stream error:", error);
             controller.error(error);
           } finally {
-            try {
-              reader.releaseLock();
-            } catch (e) {
-              console.error("Error releasing reader lock:", e);
-            }
+            try { reader.releaseLock(); } catch {}
             controller.close();
           }
         },
@@ -230,14 +204,12 @@ export class DeepseekTransformer implements Transformer {
         status: response.status,
         statusText: response.statusText,
         headers: {
-          "Content-Type":
-            response.headers.get("Content-Type") || "text/plain",
+          "Content-Type": response.headers.get("Content-Type") || "text/plain",
           "Cache-Control": "no-cache",
           Connection: "keep-alive",
         },
       });
     }
-
     return response;
   }
 }
