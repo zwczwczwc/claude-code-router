@@ -962,9 +962,10 @@ export class AnthropicTransformer implements Transformer {
     );
     try {
       // Strip reasoning_content and thinking from response to prevent multi-turn passback issues
-      delete (openaiResponse.choices[0].message as any).reasoning_content;
-      delete (openaiResponse.choices[0].message as any).thinking;
       const choice = openaiResponse.choices[0];
+      const thinkingData = (choice.message as any)?.thinking;
+      delete (choice.message as any).reasoning_content;
+      delete (choice.message as any).thinking;
       if (!choice) {
         throw new Error("No choices found in OpenAI response");
       }
@@ -1020,11 +1021,11 @@ export class AnthropicTransformer implements Transformer {
           });
         });
       }
-      if ((choice.message as any)?.thinking?.content) {
+      if (thinkingData?.content) {
         content.push({
           type: "thinking",
-          thinking: (choice.message as any).thinking.content,
-          signature: (choice.message as any).thinking.signature,
+          thinking: thinkingData.content,
+          signature: thinkingData.signature,
         });
       }
       const result = {
