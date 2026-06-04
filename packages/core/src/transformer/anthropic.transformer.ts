@@ -189,16 +189,12 @@ export class AnthropicTransformer implements Transformer {
         : undefined,
       tool_choice: request.tool_choice,
     };
-    // Use DeepSeek-native thinking parameter (not reasoning_effort).
-    // thinking:{type:"enabled"} enables reasoning WITHOUT requiring
-    // reasoning_content passthrough in multi-turn conversations.
-    if (request.thinking) {
-      const effort = getThinkLevel(request.thinking.budget_tokens);
-      result.thinking = {
-        type: "enabled",
-        effort: effort === "xhigh" ? "max" : effort === "none" ? "low" : effort,
-      };
-    }
+    // NOTE: Do NOT inject any thinking/reasoning parameter for DeepSeek.
+    // Both reasoning_effort and thinking:{type:"enabled"} trigger DeepSeek's
+    // thinking mode which requires reasoning_content passthrough in multi-turn
+    // conversations. CCR's stateless architecture cannot preserve
+    // reasoning_content across requests (CC strips thinking blocks from history).
+    // The model still produces high-quality output without explicit thinking mode.
     if (request.tool_choice) {
       if (request.tool_choice.type === "tool") {
         result.tool_choice = {
