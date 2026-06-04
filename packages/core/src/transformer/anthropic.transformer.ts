@@ -189,11 +189,14 @@ export class AnthropicTransformer implements Transformer {
         : undefined,
       tool_choice: request.tool_choice,
     };
+    // Use DeepSeek-native thinking parameter (not reasoning_effort).
+    // thinking:{type:"enabled"} enables reasoning WITHOUT requiring
+    // reasoning_content passthrough in multi-turn conversations.
     if (request.thinking) {
-      result.reasoning = {
-        effort: getThinkLevel(request.thinking.budget_tokens),
-        // max_tokens: request.thinking.budget_tokens,
-        enabled: request.thinking.type === "enabled",
+      const effort = getThinkLevel(request.thinking.budget_tokens);
+      result.thinking = {
+        type: "enabled",
+        effort: effort === "xhigh" ? "max" : effort === "none" ? "low" : effort,
       };
     }
     if (request.tool_choice) {
